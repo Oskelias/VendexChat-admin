@@ -15,7 +15,11 @@ Deno.serve(async (req: Request) => {
   const origin = req.headers.get("origin") ?? "";
   const corsHeaders: Record<string, string> = {
     "Access-Control-Allow-Origin": ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0],
-    "Access-Control-Allow-Headers": "authorization, content-type",
+    // El cliente de Supabase (functions.invoke) manda también "apikey" y "x-client-info"
+    // además de authorization/content-type — si el preflight no los declara acá, el
+    // navegador rechaza la llamada real después de aceptar el OPTIONS (por eso en los
+    // logs solo aparecía el preflight en 200 y nunca el POST real).
+    "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
     "Access-Control-Allow-Methods": "POST, OPTIONS",
   };
 
