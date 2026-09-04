@@ -29,7 +29,12 @@ export async function callAI(
         )
         : messages
 
-    const { data, error } = await supabase.functions.invoke('ai-proxy', {
+    // "ai-proxy" (la función vieja) viene devolviendo 404 en cada llamado desde hace
+    // semanas — se ve en los logs del proyecto, no depende del texto que se mande ni de
+    // créditos de Groq. "groq-proxy" es una versión más nueva y más robusta del mismo
+    // proxy (valida origen, cantidad/largo de mensajes, y hace su propia verificación de
+    // sesión) que ya está desplegada y activa — se usa esa en su lugar.
+    const { data, error } = await supabase.functions.invoke('groq-proxy', {
         body: { messages: enhancedMessages, model: GROQ_MODEL },
     })
 
