@@ -1,6 +1,3 @@
-import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import { createClient } from "jsr:@supabase/supabase-js@2";
-
 const ALLOWED_ORIGINS = [
   "https://admin.vendexchat.app",
   "https://vendexchat.app",
@@ -11,14 +8,15 @@ const GROQ_MODEL = "llama-3.3-70b-versatile";
 const MAX_MESSAGES = 20;
 const MAX_CONTENT_LENGTH = 8000;
 
+// Sin imports jsr:@supabase/* — la versión anterior traía createClient() para
+// verificar el JWT a mano, y esos imports fallaban en el arranque de la función
+// (502 con sb-error-code: EDGE_FUNCTION_ERROR en cada llamado, incluso con método y
+// headers correctos). La verificación de sesión ahora la hace la plataforma sola
+// (verify_jwt: true en el deploy), así que no hace falta ninguna dependencia extra acá.
 Deno.serve(async (req: Request) => {
   const origin = req.headers.get("origin") ?? "";
   const corsHeaders: Record<string, string> = {
     "Access-Control-Allow-Origin": ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0],
-    // El cliente de Supabase (functions.invoke) manda también "apikey" y "x-client-info"
-    // además de authorization/content-type — si el preflight no los declara acá, el
-    // navegador rechaza la llamada real después de aceptar el OPTIONS (por eso en los
-    // logs solo aparecía el preflight en 200 y nunca el POST real).
     "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
     "Access-Control-Allow-Methods": "POST, OPTIONS",
   };
@@ -34,23 +32,6 @@ Deno.serve(async (req: Request) => {
     });
   }
 
-  // Verificar JWT del llamador
-  const authHeader = req.headers.get("authorization") ?? "";
-  const callerClient = createClient(
-    Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_ANON_KEY")!,
-    { global: { headers: { Authorization: authHeader } } }
-  );
-
-  const { data: { user }, error: authError } = await callerClient.auth.getUser();
-  if (authError || !user) {
-    return new Response(JSON.stringify({ error: "No autenticado" }), {
-      status: 401,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
-  }
-
-  // Leer y validar body
   let messages: { role: string; content: string }[];
   let temperature: number;
   try {
@@ -82,26 +63,34 @@ Deno.serve(async (req: Request) => {
     });
   }
 
-  const groqRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${groqKey}`,
-    },
-    body: JSON.stringify({ model: GROQ_MODEL, messages, temperature }),
-  });
+  try {
+    const groqRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${groqKey}`,
+      },
+      body: JSON.stringify({ model: GROQ_MODEL, messages, temperature }),
+    });
 
-  if (!groqRes.ok) {
-    const err = await groqRes.text();
-    return new Response(JSON.stringify({ error: `Groq error: ${err}` }), {
+    if (!groqRes.ok) {
+      const err = await groqRes.text();
+      return new Response(JSON.stringify({ error: `Groq error: ${err}` }), {
+        status: 502,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    const data = await groqRes.json();
+    return new Response(JSON.stringify(data), {
+      status: 200,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : "Error desconocido";
+    return new Response(JSON.stringify({ error: `Fetch to Groq failed: ${message}` }), {
       status: 502,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
-
-  const data = await groqRes.json();
-  return new Response(JSON.stringify(data), {
-    status: 200,
-    headers: { ...corsHeaders, "Content-Type": "application/json" },
-  });
 });
